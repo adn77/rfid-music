@@ -1,4 +1,4 @@
-﻿/*
+/*
 Name:		rfid_arduino_nano.ino
 Arduino Pro Mini w/ATmega328 3.3V 8 Mhz
 Created:	3/21/2017 12:03:49 AM
@@ -50,26 +50,25 @@ Author:	ab
 
 #define RST_PIN         9          // Configurable, see typical pin layout above
 #define SS_PIN          10         // Configurable, see typical pin layout above
-#define ESP_ENABLE_PIN  4
+#define ESP_ENABLE_PIN  6
 #define LED_PIN			2			// Red LED
 
 MFRC522 mfrc522(SS_PIN, RST_PIN);  // Create MFRC522 instance
-
-SoftwareSerial Serial1(PIN6, PIN5);
+SoftwareSerial swSerial(8,7);
 int ticks = 0;
 
 void startecho()
 {
 	while (true)
 	{
-		if (Serial1.available())
-			Serial.write(Serial1.read());
+		if (swSerial.available())
+			Serial.println(swSerial.read());
 	}
 }
 
 bool sendtoESP(String cmd, String param)
 {
-	SimpleSerial simpleserial(Serial1);
+	SimpleSerial simpleserial(swSerial);
 	COMMAND command;
 	bool bres = false;
 
@@ -79,13 +78,13 @@ bool sendtoESP(String cmd, String param)
 	delay(300);
 	digitalWrite(ESP_ENABLE_PIN, HIGH);
 	digitalWrite(LED_PIN, LOW);
-	Serial1.begin(19200);
 	//startecho();
 	// wait for the 'y' command for 2 seconds
 
 	simpleserial.setTimeout(200);
-	for(int i=0;i<2;i++)
+	for(int i=0;i<10;i++)
 	{
+//		Serial.println("Waiting for ESP...");
 		if (!simpleserial.recieveCmd(command))
 			continue;
 		if (command.cmd == "u")
@@ -97,13 +96,12 @@ bool sendtoESP(String cmd, String param)
 	}
 	if (!bres)
 		return bres;
-
 	// ready to send command
 	simpleserial.sendCmd(cmd,param);
 	//startecho();
 	// get answer
-	Serial1.setTimeout(1000);
-	for (int i = 0; i < 5; i++)
+	simpleserial.setTimeout(200);
+	for (int i = 0; i < 10; i++)
 	{
 		if (!simpleserial.recieveCmd(command))
 			continue;
@@ -114,13 +112,13 @@ bool sendtoESP(String cmd, String param)
 			break;
 		else if (command.cmd == "q")
 		{
-			Serial1.end();
+			//swSerial.end();
 			return bres;
 		}
 		else
 			break;
 	}
-	Serial1.end();
+	//swSerial.end();
 	return false;
 }
 
@@ -128,28 +126,31 @@ void mfrc522_fast_Reset()
 {
 	digitalWrite(RST_PIN, HIGH);
 	mfrc522.PCD_Reset();
-	mfrc522.PCD_WriteRegister(mfrc522.TModeReg, 0x80);			// TAuto=1; timer starts automatically at the end of the transmission in all communication modes at all speeds
+	mfrc522.PCD_WriteRegister(mfrc522.TModeReg, 0x80);		// TAuto=1; timer starts automatically at the end of the transmission in all communication modes at all speeds
 	mfrc522.PCD_WriteRegister(mfrc522.TPrescalerReg, 0x43);		// 10μs.
 //	mfrc522.PCD_WriteRegister(mfrc522.TPrescalerReg, 0x20);		// test
 
-	mfrc522.PCD_WriteRegister(mfrc522.TReloadRegH, 0x00);		// Reload timer with 0x064 = 30, ie 0.3ms before timeout.
+	mfrc522.PCD_WriteRegister(mfrc522.TReloadRegH, 0x00);		// Reload timer with 0x01E = 30, ie 0.3ms before timeout.
 	mfrc522.PCD_WriteRegister(mfrc522.TReloadRegL, 0x1E);
-	//mfrc522.PCD_WriteRegister(mfrc522.TReloadRegL, 0x1E);
 
 	mfrc522.PCD_WriteRegister(mfrc522.TxASKReg, 0x40);		// Default 0x00. Force a 100 % ASK modulation independent of the ModGsPReg register setting
 	mfrc522.PCD_WriteRegister(mfrc522.ModeReg, 0x3D);		// Default 0x3F. Set the preset value for the CRC coprocessor for the CalcCRC command to 0x6363 (ISO 14443-3 part 6.2.4)
 
-	mfrc522.PCD_AntennaOn();						// Enable the antenna driver pins TX1 and TX2 (they were disabled by the reset)
+	mfrc522.PCD_AntennaOn();					// Enable the antenna driver pins TX1 and TX2 (they were disabled by the reset)
 }
 
 void setup() {
 	Serial.begin(115200);		// Initialize serial communications with the PC
-	while (!Serial) delay(1);		// Do nothing if no serial port is opened (added for Arduinos based on ATMEGA32U4)
+	Serial.println("Starting up...");
+	//while (!Serial) delay(1);		// Do nothing if no serial port is opened (added for Arduinos based on ATMEGA32U4)
+	swSerial.begin(19200);
 
 	pinMode(ESP_ENABLE_PIN, OUTPUT);
 	pinMode(RST_PIN, OUTPUT);
 	pinMode(SS_PIN, OUTPUT);
 	pinMode(LED_PIN, OUTPUT);
+
+	digitalWrite(ESP_ENABLE_PIN, LOW);
 
 	// init reader
 	SPI.begin();			// Init SPI bus
@@ -158,15 +159,18 @@ void setup() {
 	digitalWrite(SS_PIN, HIGH);
 	digitalWrite(RST_PIN, HIGH);
 
-	mfrc522_fast_Reset();
-	if (mfrc522.PICC_IsNewCardPresent())
+	Serial.println("Setup RC522...");
+	mfrc522.PCD_Init();
+	if (mfrc522_fastDetect())
 	{
 		Serial.println("Initializing ESP-01");
 		// Init wifi network
 		sendtoESP("i", "");	// start AP and the web to reconfigure WiFi
 		delay(120000);		// allow 2 min to reconfigure WiFi
 	}
-
+	Serial.println("Resetting RC522...");
+	mfrc522_fast_Reset();
+	Serial.println("Setup done...");
 }
 
 long readVcc() {
@@ -225,17 +229,17 @@ bool mfrc522_fastDetect3()
 	byte n;
 	uint16_t i;
 
-	mfrc522.PCD_ClearRegisterBitMask(MFRC522::CollReg, 0x80);		// ValuesAfterColl=1 => Bits received after collision are cleared.
+	mfrc522.PCD_ClearRegisterBitMask(MFRC522::CollReg, 0x80);			// ValuesAfterColl=1 => Bits received after collision are cleared.
 
-	//mfrc522.PCD_WriteRegister(MFRC522::CommandReg, MFRC522::PCD_Idle);			// Stop any active command.
-	mfrc522.PCD_WriteRegister(MFRC522::ComIrqReg, 0x7F);					// Clear all seven interrupt request bits
+	mfrc522.PCD_WriteRegister(MFRC522::CommandReg, MFRC522::PCD_Idle);		// Stop any active command.
+	mfrc522.PCD_WriteRegister(MFRC522::ComIrqReg, 0x7F);				// Clear all seven interrupt request bits
 	mfrc522.PCD_SetRegisterBitMask(MFRC522::FIFOLevelReg, 0x80);			// FlushBuffer = 1, FIFO initialization
 	mfrc522.PCD_WriteRegister(MFRC522::FIFODataReg, 1, &command);			// Write sendData to the FIFO
 	mfrc522.PCD_WriteRegister(MFRC522::BitFramingReg, validBits);			// Bit adjustments
-	mfrc522.PCD_WriteRegister(MFRC522::CommandReg, MFRC522::PCD_Transceive);				// Execute the command
+	mfrc522.PCD_WriteRegister(MFRC522::CommandReg, MFRC522::PCD_Transceive);	// Execute the command
 	mfrc522.PCD_SetRegisterBitMask(MFRC522::BitFramingReg, 0x80);			// StartSend=1, transmission of data starts
 
-	i = 10;
+	i = 20;
 	while (1) {
 		n = mfrc522.PCD_ReadRegister(MFRC522::ComIrqReg);	// ComIrqReg[7..0] bits are: Set1 TxIRq RxIRq IdleIRq HiAlertIRq LoAlertIRq ErrIRq TimerIRq
 		if (n & waitIRq) {					// One of the interrupts that signal success has been set.
@@ -248,28 +252,18 @@ bool mfrc522_fastDetect3()
 			return false;
 		}
 	}
-
 	return true;
 }
 
 void loop() {
 	ticks++;
-
-	// the PCD_NoCmdChange not really needed as the reader is wakened up by the card
-	//mfrc522.PCD_WriteRegister(mfrc522.CommandReg, mfrc522.PCD_NoCmdChange);
-
-	//mfrc522_fastDetect3();
-	//mfrc522.PCD_WriteRegister(mfrc522.CommandReg, mfrc522.PCD_NoCmdChange | 0x10);
-	//LowPower.powerDown(SLEEP_15MS, ADC_OFF, BOD_OFF);
-	//return;
-
+	// wake up NFC
+	mfrc522.PCD_SoftPowerUp();
 	// Look for new cards
 	if(!mfrc522_fastDetect3()){
-	//if (!mfrc522.PICC_IsNewCardPresent()) {
 		// put NFC to sleep
-		mfrc522.PCD_WriteRegister(mfrc522.CommandReg, mfrc522.PCD_NoCmdChange | 0x10);
-//		if (ticks > 24 * 60 * 60)
-		if (false)
+		mfrc522.PCD_SoftPowerDown();
+		if (ticks > 24 * 60 * 60)
 		{
 			ticks = 0;
 			sendtoESP("b", measurepower());
@@ -278,25 +272,25 @@ void loop() {
 	else
 	{
 		bool status = mfrc522.PICC_ReadCardSerial();
-		//Serial.println("got something");
-		mfrc522.PCD_WriteRegister(mfrc522.CommandReg, mfrc522.PCD_NoCmdChange | 0x10);
+		Serial.println("got something");
+		mfrc522.PCD_SoftPowerDown();
 		if (status)
 		{
-			//Serial.println("ready...");
+			// Serial.println("ready...");
 			// Now a card is selected. The UID and SAK is in mfrc522.uid.
 			// Dump UID
-			//Serial.print(F("Card UID:"));
+			Serial.print(F("Card UID:"));
 			String id = "";
 			for (byte i = 0; i < mfrc522.uid.size; i++) {
 				id = id + String(mfrc522.uid.uidByte[i], HEX);
 			}
-			bool cmdresult = sendtoESP("t", id);
-			Serial.println(cmdresult);
 			Serial.println(id);
+			bool cmdresult = sendtoESP("t", id);
+	//		Serial.println(cmdresult);
 		}
 	}
 	Serial.flush();
-	Serial1.flush();
+	swSerial.flush();
 	// Enter power down state for 1 s with ADC and BOD module disabled
 	LowPower.powerDown(SLEEP_1S, ADC_OFF, BOD_OFF);
 	//LowPower.powerDown(SLEEP_15MS, ADC_OFF, BOD_OFF);
